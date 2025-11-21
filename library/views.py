@@ -1,3 +1,6 @@
+from datetime import timedelta
+
+from django.db.models import Count
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from .models import Author, Book, Member, Loan
@@ -11,7 +14,7 @@ class AuthorViewSet(viewsets.ModelViewSet):
     serializer_class = AuthorSerializer
 
 class BookViewSet(viewsets.ModelViewSet):
-    queryset = Book.objects.all()
+    queryset = Book.objects.prefetch_related("author")
     serializer_class = BookSerializer
 
     @action(detail=True, methods=['post'])
@@ -49,6 +52,35 @@ class MemberViewSet(viewsets.ModelViewSet):
     queryset = Member.objects.all()
     serializer_class = MemberSerializer
 
+    @action(methods=["get"], detail=False)
+    def top_active(self, request):
+        
+        top_members = self.get_object()
+        top_members = top_members.annotate(active_loans=Count("loans")).order_by("-active_loans")[:5]
+        
+        return top_members
+        
+
+
 class LoanViewSet(viewsets.ModelViewSet):
     queryset = Loan.objects.all()
     serializer_class = LoanSerializer
+    
+    
+    @action(detail=True, methods=['post'])
+    def extend_due_date(self, request, pk=None):
+        try:
+            additional_days = int(request.data.get('additional_days'))
+            loan = self.get_object()
+            if not additional_days:
+                return Response({'error': "additional days field required"}, status=status.HTTP_400_BAD_REQUEST)
+            elif additional_days <= 0:
+                return Response({'error': "additional days must be a positive number"}, status=status.HTTP_400_BAD_REQUEST)
+            
+            elif loan.is_returned:
+                return Response({'error': "Can't extend due date for this book, Book already returned"}, status=status.HTTP_400_BAD_REQUEST)
+            loan.due_date = loan.due_date + timedelta(additional_days)
+            loan.save()
+            return Response({'status': f"Due date updated by {additional_days}, new loan due date is {loan.due_date}"}, status=status.HTTP_200_OK)
+        except Exception as err:
+            return Response({'error': f"{err.args}"}, status.HTTP_500_INTERNAL_SERVER_ERROR)
